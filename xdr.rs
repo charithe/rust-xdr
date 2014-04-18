@@ -4,14 +4,15 @@
 //! Implementation of unpacking routines for External Data Representation (XDR) format.
 //! Follows the RFC at https://tools.ietf.org/html/rfc4506 
 //! Copyright 2014 Charith Ellawala: charith {at} lucideelectricdreams {dot} com
-
 pub mod xdr {
     use std::str;
 
+    static PADDING_MULTIPLIER : uint = 4;
     static BYTE_LEN : uint = 8;
     static INT_BYTES : uint = 4;
-    static UINT_BYTES : uint  = 4;
+    static HYPERINT_BYTES : uint  = 8;
 
+    /// Struct holding a buffer of bytes encoded using XDR
     pub struct Xdr<'r> {
         buffer: &'r[u8],
         curr_pos: uint,
@@ -19,15 +20,78 @@ pub mod xdr {
     }
 
     impl <'r> Xdr<'r> {
+        /// Create a new instance of a reader using the provided byte vector. 
+        /// Call the `unpack_*` methods on the returned struct to consume the data
         pub fn new(data : &'r[u8]) -> Xdr<'r> {
             Xdr { buffer: data, curr_pos: 0, size: data.len() }
         }
-        pub fn unpack_uint(&mut self) -> Option<u32> {
-            self.unpack_int_type(UINT_BYTES)
+
+        /// Read a UTF-8 string
+        pub fn unpack_string(&mut self) -> Option<~str> {
+            match self.unpack_var_bytes() {
+                Some(slice) => str::from_utf8(slice).and_then(|s| Some(s.to_owned())),
+                None => None
+            }
         }
 
+        /// Read variable length byte array
+        pub fn unpack_var_bytes(&mut self) -> Option<~[u8]> {
+            self.unpack_uint().and_then(|len| self.unpack_fixed_bytes(len as uint))
+        }
+
+        /// Read fixed length byte array 
+        pub fn unpack_fixed_bytes(&mut self, n: uint) -> Option<~[u8]> {
+            let padded_length = Xdr::calc_padded_len(n);
+
+            if self.curr_pos + padded_length > self.size {
+                return None
+            }
+
+            let slice = self.buffer.slice(self.curr_pos, self.curr_pos + n);
+            self.curr_pos += padded_length;
+
+            Some(slice.to_owned())
+        }
+
+        fn calc_padded_len(n: uint) -> uint {
+            let temp = n % PADDING_MULTIPLIER;
+            let padding = if temp > 0 { PADDING_MULTIPLIER - temp } else { 0 };
+            n + padding
+        }
+
+        /// Read a boolean value
+        pub fn unpack_bool(&mut self) -> Option<bool> {
+            self.unpack_enum(|v| { match v {
+                    1 => Some(true),
+                    0 => Some(false),
+                    _ => None
+                }
+            })
+        }
+
+        /// Read an enum. The convert function must accept an i32 and return the corresponding enum value
+        pub fn unpack_enum<E>(&mut self, convert: |val:i32| -> Option<E>) -> Option<E> {
+            self.unpack_int().and_then(convert)
+        }
+
+        /// Read an unsigned 32-bit integer
+        pub fn unpack_uint(&mut self) -> Option<u32> {
+            self.unpack_int_type(INT_BYTES)
+        }
+
+        /// Read a signed 32-bit integer
         pub fn unpack_int(&mut self) -> Option<i32> {
             self.unpack_int_type(INT_BYTES)
+        }
+
+        /// Read an unsigned 64-bit integer
+        pub fn unpack_uhyperint(&mut self) -> Option<u64> {
+            self.unpack_int_type(HYPERINT_BYTES)
+        }
+
+        /// Read a signed 64-bit integer
+        pub fn unpack_hyperint(&mut self) -> Option<i64> {
+            self.unpack_int_type(HYPERINT_BYTES)
         }
 
         fn unpack_int_type<T: Int+FromPrimitive>(&mut self, num_bytes: uint) -> Option<T> {
@@ -47,100 +111,7 @@ pub mod xdr {
                 None
             }
         }
-
-        pub fn unpack_string(&mut self) -> Option<~str> {
-            let str_len = self.unpack_uint();
-            if str_len.is_none() {
-                return None
-            }
-
-            let slen = str_len.unwrap() as uint;
-            if self.curr_pos + slen > self.size {
-                return None
-            }
-
-            let slice = self.buffer.slice(self.curr_pos, self.curr_pos + slen);
-
-            // calculate the padding amount
-            let tmp = slen % 4;
-            let padding = if tmp > 0 { 4 - tmp } else { 0 };
-            self.curr_pos += slen + padding;
-
-            str::from_utf8(slice).and_then(|s| Some(s.to_owned())) 
-        }
-
     }
 }
 
-#[cfg(test)]
-mod xdr_test {
-    use xdr;
-
-    #[test]
-    fn test_unpack_uint_happy_case() {
-        let buffer = ~[0u8,0u8,0u8,128u8,23u8,0u8,0u8];
-        let mut x = xdr::Xdr::new(buffer);
-        let v = x.unpack_uint();
-        assert!(v.is_none() == false);
-        assert!(v.unwrap() == 128);
-    }
-
-    #[test]
-    fn test_unpack_uint_buffer_too_short() {
-        let buffer = ~[0u8,0u8,128u8];
-        let mut x = xdr::Xdr::new(buffer);
-        let v = x.unpack_uint();
-        assert!(v.is_none());
-    }
-
-    #[test]
-    fn test_unpack_int_positive() {
-        let buffer = ~[0u8,0u8,0u8,246u8,23u8,0u8,0u8];
-        let mut x = xdr::Xdr::new(buffer);
-        let v = x.unpack_int();
-        assert!(v.is_none() == false);
-        assert!(v.unwrap() == 246);
-    }
-
-    #[test]
-    fn test_unpack_int_negative() {
-        let buffer = ~[255u8,255u8,255u8,231u8,23u8,0u8,0u8];
-        let mut x = xdr::Xdr::new(buffer);
-        let v = x.unpack_int();
-        assert!(v.is_none() == false);
-        assert!(v.unwrap() == -25);
-    }
-
-    #[test]
-    fn test_unpack_string_len_is_multiple_of_four() {
-        let buffer = ~[0u8,0u8,0u8,4u8,82u8,85u8,83u8,84u8,0u8,0u8,0u8,25u8];
-        let mut x = xdr::Xdr::new(buffer);
-        let v = x.unpack_string();
-        let next_val = x.unpack_uint();
-        assert!(v.is_none() == false);
-        assert!(v.unwrap() == ~"RUST");
-        assert!(next_val.is_none() == false);
-        assert!(next_val.unwrap() == 25);
-    }
-
-    #[test]
-    fn test_unpack_string_len_is_not_multiple_of_four() {
-        let buffer = ~[0u8,0u8,0u8,5u8,82u8,85u8,83u8,84u8,89u8,0u8,0u8,0u8,0u8,0u8,0u8,25u8];
-        let mut x = xdr::Xdr::new(buffer);
-        let v = x.unpack_string();
-        let next_val = x.unpack_uint();
-        assert!(v.is_none() == false);
-        assert!(v.unwrap() == ~"RUSTY");
-        assert!(next_val.is_none() == false);
-        assert!(next_val.unwrap() == 25);
-    }
-
-    #[test]
-    fn test_unpack_string_len_is_too_long() {
-        let buffer = ~[0u8,0u8,0u8,45u8,82u8,85u8,83u8,84u8,89u8,0u8];
-        let mut x = xdr::Xdr::new(buffer);
-        let v = x.unpack_string();
-        assert!(v.is_none());
-    }
-}
-
+mod xdr_tests;
