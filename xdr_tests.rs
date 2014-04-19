@@ -162,4 +162,17 @@ mod tests {
         let v = x.unpack_string();
         assert!(v.is_none());
     }
+
+    #[test]
+    unsafe fn test_unpack_fixed_uint_array() {
+        let buffer = ~[0u8,0u8,0u8,1u8,0u8,0u8,0u8,2u8,0u8,0u8,0u8,3u8];
+        let mut x = xdr::Xdr::new(buffer);
+        let v = x.unpack_fixed_array(xdr::UINT,3);
+
+        assert!(v.is_none() == false);
+        
+        let a = v.unwrap();
+        assert!(a.len() == 3);
+        assert!(a == ~[1u32,2u32,3u32]);
+    }
 }

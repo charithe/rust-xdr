@@ -6,6 +6,7 @@
 //! Copyright 2014 Charith Ellawala: charith {at} lucideelectricdreams {dot} com
 pub mod xdr {
     use std::str;
+    use std::cast;
 
     static PADDING_MULTIPLIER : uint = 4;
     static BYTE_LEN : uint = 8;
@@ -19,12 +20,42 @@ pub mod xdr {
         size: uint
     }
 
+    pub enum XdrDataType {
+        UINT,
+        INT,
+        HYPERINT,
+        UHYPERINT,
+        BOOL,
+        STRING
+    }
+
+    pub trait XdrPrimitive {}
+    impl XdrPrimitive for u32 {}
+    impl XdrPrimitive for i32 {}
+    impl XdrPrimitive for u64 {}
+    impl XdrPrimitive for i64 {}
+    impl XdrPrimitive for bool {}
+    impl XdrPrimitive for ~str {}
+
     impl <'r> Xdr<'r> {
         /// Create a new instance of a reader using the provided byte vector. 
         /// Call the `unpack_*` methods on the returned struct to consume the data
         pub fn new(data : &'r[u8]) -> Xdr<'r> {
             Xdr { buffer: data, curr_pos: 0, size: data.len() }
         }
+
+        /// Read a value of the given type
+        pub unsafe fn unpack_value<T:XdrPrimitive>(&mut self, data_type: XdrDataType) -> Option<T> {
+            match data_type {
+                UINT => self.unpack_uint().and_then(|v| Some(cast::transmute(v))),
+                INT  => self.unpack_int().and_then(|v| Some(cast::transmute(v))),
+                HYPERINT => self.unpack_hyperint().and_then(|v| Some(cast::transmute(v))),
+                UHYPERINT => self.unpack_uhyperint().and_then(|v| Some(cast::transmute(v))),
+                BOOL => self.unpack_bool().and_then(|v| Some(cast::transmute(v))),
+                STRING => self.unpack_string().and_then(|v| Some(cast::transmute(v))),
+            }
+        }
+
 
         /// Read a UTF-8 string
         pub fn unpack_string(&mut self) -> Option<~str> {
@@ -62,16 +93,32 @@ pub mod xdr {
         /// Read a boolean value
         pub fn unpack_bool(&mut self) -> Option<bool> {
             self.unpack_enum(|v| { match v {
-                    1 => Some(true),
-                    0 => Some(false),
-                    _ => None
-                }
+                1 => Some(true),
+                0 => Some(false),
+                _ => None
+            }
             })
         }
 
         /// Read an enum. The convert function must accept an i32 and return the corresponding enum value
         pub fn unpack_enum<E>(&mut self, convert: |val:i32| -> Option<E>) -> Option<E> {
             self.unpack_int().and_then(convert)
+        }
+
+        /// Read an array of data
+        pub unsafe fn unpack_fixed_array<T:XdrPrimitive+Clone>(&mut self, data_type: XdrDataType, array_len: uint) -> Option<~[T]> {
+            let mut item_array = Vec::with_capacity(array_len);
+            for _ in range(0,array_len) {
+                let item: Option<T> = self.unpack_value(data_type);
+                if item.is_some() {
+                    item_array.push(item.unwrap());
+                }
+                else {
+                    return None
+                }
+            }
+
+            Some(item_array.slice_from(0).to_owned())
         }
 
         /// Read an unsigned 32-bit integer
