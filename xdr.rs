@@ -5,27 +5,75 @@
 //! Follows the RFC at https://tools.ietf.org/html/rfc4506 
 //! Copyright 2014 Charith Ellawala: charith {at} lucideelectricdreams {dot} com
 pub mod xdr {
-    use std::str;
+    use std::io::{MemReader,IoResult};
 
-    static PADDING_MULTIPLIER : uint = 4;
-    static BYTE_LEN : uint = 8;
-    static INT_BYTES : uint = 4;
-    static HYPERINT_BYTES : uint  = 8;
+    pub type XdrResult<T> = Result<T,&'static str>;
 
     /// Struct holding a buffer of bytes encoded using XDR
-    pub struct Xdr<'r> {
-        buffer: &'r[u8],
-        curr_pos: uint,
-        size: uint
+    pub struct Xdr {
+        reader: MemReader
     }
 
-    impl <'r> Xdr<'r> {
+    pub trait XdrPrimitive {
+        fn read_from_xdr(x: &mut Xdr, _: Option<Self>) -> XdrResult<Self>;
+    }
+
+    impl XdrPrimitive for u32 {
+        fn read_from_xdr(x: &mut Xdr, _: Option<u32>) -> XdrResult<u32> {
+            read_val(x.reader.read_be_u32()) 
+        }
+    }
+
+    impl XdrPrimitive for i32 {
+        fn read_from_xdr(x: &mut Xdr, _:Option<i32>) -> XdrResult<i32> {
+            read_val(x.reader.read_be_i32()) 
+        }
+    }
+
+    impl XdrPrimitive for u64 {
+        fn read_from_xdr(x: &mut Xdr, _: Option<u64>) -> XdrResult<u64> {
+            read_val(x.reader.read_be_u64())
+        }
+    }
+
+    impl XdrPrimitive for i64 {
+        fn read_from_xdr(x: &mut Xdr, _:Option<i64>) -> XdrResult<i64> {
+            read_val(x.reader.read_be_i64()) 
+        }
+    }
+
+    impl XdrPrimitive for f32 {
+        fn read_from_xdr(x: &mut Xdr, _:Option<f32>) -> XdrResult<f32> {
+            read_val(x.reader.read_be_f32()) 
+        }
+    }
+
+    impl XdrPrimitive for f64 {
+        fn read_from_xdr(x: &mut Xdr, _:Option<f64>) -> XdrResult<f64> {
+            read_val(x.reader.read_be_f64()) 
+        }
+    }
+
+    fn read_val<T>(val: IoResult<T>) -> XdrResult<T> {
+        match val {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.desc)
+        }
+    }
+
+
+    impl Xdr {
         /// Create a new instance of a reader using the provided byte vector. 
         /// Call the `unpack_*` methods on the returned struct to consume the data
-        pub fn new(data : &'r[u8]) -> Xdr<'r> {
-            Xdr { buffer: data, curr_pos: 0, size: data.len() }
+        pub fn new(data : &[u8]) -> Xdr {
+            Xdr { reader: MemReader::new(Vec::from_slice(data)) }
         }
 
+        pub fn unpack_primitive<T:XdrPrimitive>(&mut self) -> XdrResult<T> {
+            XdrPrimitive::read_from_xdr(self, None::<T>)
+        }
+
+        /*
         /// Read a UTF-8 string
         pub fn unpack_string(&mut self) -> Option<~str> {
             match self.unpack_var_bytes() {
@@ -62,10 +110,10 @@ pub mod xdr {
         /// Read a boolean value
         pub fn unpack_bool(&mut self) -> Option<bool> {
             self.unpack_enum(|v| { match v {
-                    1 => Some(true),
-                    0 => Some(false),
-                    _ => None
-                }
+                1 => Some(true),
+                0 => Some(false),
+                _ => None
+            }
             })
         }
 
@@ -111,6 +159,7 @@ pub mod xdr {
                 None
             }
         }
+    */
     }
 }
 
