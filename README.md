@@ -14,8 +14,9 @@ extern crate xdr;
 
 let x = xdr::Xdr::new(bytes);
 
-let string = x.unpack_string().expect("Failed to read string");
-let integer = x.unpack_int().expect("Failed to read integer");
+let string = try!(x.unpack_string());
+let integer = try!(x.unpack_int());
+let myint:XdrResult<f64> = try!(x.unpack_primitive());
 ...
 ```
 

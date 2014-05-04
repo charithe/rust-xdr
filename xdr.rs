@@ -3,11 +3,18 @@
 
 //! Implementation of unpacking routines for External Data Representation (XDR) format.
 //! Follows the RFC at https://tools.ietf.org/html/rfc4506 
+//! To Do:
+//!     - Implement quadruple precision floats
+//!     - Implement structs and unions
 //! Copyright 2014 Charith Ellawala: charith {at} lucideelectricdreams {dot} com
 pub mod xdr {
     use std::io::{MemReader,IoResult};
+    use std::str;
+    use std::vec::Vec;
 
     pub type XdrResult<T> = Result<T,&'static str>;
+
+    static PADDING_MULTIPLE:uint = 4;
 
     /// Struct holding a buffer of bytes encoded using XDR
     pub struct Xdr {
@@ -54,6 +61,17 @@ pub mod xdr {
         }
     }
 
+    impl XdrPrimitive for bool {
+        fn read_from_xdr(x: &mut Xdr, _:Option<bool>) -> XdrResult<bool> {
+            match read_val(x.reader.read_be_u32()) {
+                Ok(0) => Ok(false),
+                Ok(1) => Ok(true),
+                Ok(_) => Err("Boolean values must be between 0 and 1"),
+                Err(e) => Err(e)
+            }
+        }
+    }
+
     fn read_val<T>(val: IoResult<T>) -> XdrResult<T> {
         match val {
             Ok(v) => Ok(v),
@@ -63,103 +81,106 @@ pub mod xdr {
 
 
     impl Xdr {
+        
         /// Create a new instance of a reader using the provided byte vector. 
-        /// Call the `unpack_*` methods on the returned struct to consume the data
         pub fn new(data : &[u8]) -> Xdr {
             Xdr { reader: MemReader::new(Vec::from_slice(data)) }
         }
 
+        /// Read a primitive (u32, i32, u64, i64, f32 and f64) type from the buffer
         pub fn unpack_primitive<T:XdrPrimitive>(&mut self) -> XdrResult<T> {
             XdrPrimitive::read_from_xdr(self, None::<T>)
         }
 
-        /*
-        /// Read a UTF-8 string
-        pub fn unpack_string(&mut self) -> Option<~str> {
-            match self.unpack_var_bytes() {
-                Some(slice) => str::from_utf8(slice).and_then(|s| Some(s.to_owned())),
-                None => None
-            }
+        /// Read a 32-bit unsigned integer
+        pub fn unpack_uint(&mut self) -> XdrResult<u32> {
+            self.unpack_primitive()
         }
 
-        /// Read variable length byte array
-        pub fn unpack_var_bytes(&mut self) -> Option<~[u8]> {
-            self.unpack_uint().and_then(|len| self.unpack_fixed_bytes(len as uint))
+        /// Read a 32-bit signed integer
+        pub fn unpack_int(&mut self) -> XdrResult<i32> {
+            self.unpack_primitive()
         }
 
-        /// Read fixed length byte array 
-        pub fn unpack_fixed_bytes(&mut self, n: uint) -> Option<~[u8]> {
-            let padded_length = Xdr::calc_padded_len(n);
-
-            if self.curr_pos + padded_length > self.size {
-                return None
-            }
-
-            let slice = self.buffer.slice(self.curr_pos, self.curr_pos + n);
-            self.curr_pos += padded_length;
-
-            Some(slice.to_owned())
+        /// Read a 64-bit unsigned integer 
+        pub fn unpack_ulong(&mut self) -> XdrResult<u64> {
+            self.unpack_primitive()
         }
 
-        fn calc_padded_len(n: uint) -> uint {
-            let temp = n % PADDING_MULTIPLIER;
-            let padding = if temp > 0 { PADDING_MULTIPLIER - temp } else { 0 };
-            n + padding
+        /// Read a 64 bit signed integer
+        pub fn unpack_long(&mut self) -> XdrResult<i64> {
+            self.unpack_primitive()
         }
 
-        /// Read a boolean value
-        pub fn unpack_bool(&mut self) -> Option<bool> {
-            self.unpack_enum(|v| { match v {
-                1 => Some(true),
-                0 => Some(false),
-                _ => None
-            }
-            })
+        /// Read a 32-bit float
+        pub fn unpack_float(&mut self) -> XdrResult<f32> {
+            self.unpack_primitive()
         }
 
-        /// Read an enum. The convert function must accept an i32 and return the corresponding enum value
-        pub fn unpack_enum<E>(&mut self, convert: |val:i32| -> Option<E>) -> Option<E> {
-            self.unpack_int().and_then(convert)
+        /// Read a 64-bit double
+        pub fn unpack_double(&mut self) -> XdrResult<f64> {
+            self.unpack_primitive()
         }
 
-        /// Read an unsigned 32-bit integer
-        pub fn unpack_uint(&mut self) -> Option<u32> {
-            self.unpack_int_type(INT_BYTES)
+        /// Read a boolean
+        pub fn unpack_boolean(&mut self) -> XdrResult<bool> {
+            self.unpack_primitive()
         }
 
-        /// Read a signed 32-bit integer
-        pub fn unpack_int(&mut self) -> Option<i32> {
-            self.unpack_int_type(INT_BYTES)
-        }
-
-        /// Read an unsigned 64-bit integer
-        pub fn unpack_uhyperint(&mut self) -> Option<u64> {
-            self.unpack_int_type(HYPERINT_BYTES)
-        }
-
-        /// Read a signed 64-bit integer
-        pub fn unpack_hyperint(&mut self) -> Option<i64> {
-            self.unpack_int_type(HYPERINT_BYTES)
-        }
-
-        fn unpack_int_type<T: Int+FromPrimitive>(&mut self, num_bytes: uint) -> Option<T> {
-            if self.curr_pos + num_bytes <= self.size {
-                let slice = self.buffer.slice(self.curr_pos, self.curr_pos + num_bytes);
-                self.curr_pos += num_bytes;
-                let mut shift_amt:T = FromPrimitive::from_uint((num_bytes - 1) * BYTE_LEN).unwrap();
-                let mut ret_val:T = FromPrimitive::from_uint(0).unwrap();;
-                for i in range(0,num_bytes) {
-                    let mask:T = FromPrimitive::from_u8(slice[i]).unwrap();
-                    ret_val = ret_val | (mask << shift_amt); 
-                    shift_amt = shift_amt - FromPrimitive::from_uint(BYTE_LEN).unwrap();
-                }
-                Some(ret_val)
+        /// Read a byte array of the specified length
+        pub fn unpack_bytes(&mut self, num_bytes: uint) -> XdrResult<~[u8]> {
+            let unpack_len = if num_bytes % PADDING_MULTIPLE != 0 {
+                num_bytes + (PADDING_MULTIPLE - (num_bytes % PADDING_MULTIPLE))
             }
             else {
-                None
+                num_bytes
+            };
+
+            match read_val(self.reader.read_exact(unpack_len)) {
+                Ok(v) => Ok(v.slice_to(num_bytes).to_owned()),
+                Err(e) => Err(e)
             }
         }
-    */
+
+        /// Read a variable length byte array
+        pub fn unpack_varlen_bytes(&mut self) -> XdrResult<~[u8]> {
+            let len_result:XdrResult<u32> = self.unpack_primitive();
+            match len_result {
+                Ok(len) => self.unpack_bytes(len as uint),
+                Err(e) => Err(e)
+            }
+        }
+
+        /// Read a UTF-8 string
+        pub fn unpack_string(&mut self) -> XdrResult<~str> {
+            match self.unpack_varlen_bytes() {
+                Ok(slice) => match str::from_utf8_owned(slice) { 
+                    Some(s) => Ok(s),
+                    None => Err("Failed to create string")
+                },
+                Err(e) => Err(e)
+            }
+        }
+
+        /// Unpack an array of primitives with a known length
+        pub fn unpack_array<T:XdrPrimitive + Clone>(&mut self, num_elements: uint) -> XdrResult<~[T]> {
+            /* the elegant solution is to do this:
+                Vec::from_fn(num_elements, |_| {  self.unpack_primitive().unwrap()  });
+              but I am not aware of a way to handle error conditions in the closure and return early from the method
+            */
+            let mut tmp_vec:Vec<T> = Vec::with_capacity(num_elements);
+            for _ in range(0,num_elements) {
+                tmp_vec.push(try!(self.unpack_primitive()))
+            }
+
+            Ok(tmp_vec.as_slice().to_owned())
+        }
+
+        /// Unpack an array of primitives with an unknown length
+        pub fn unpack_varlen_array<T:XdrPrimitive + Clone>(&mut self) -> XdrResult<~[T]> {
+            let len:u32 = try!(self.unpack_primitive());
+            self.unpack_array(len as uint)
+        }
     }
 }
 
