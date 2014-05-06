@@ -139,7 +139,7 @@ mod tests {
         let v = x.unpack_string();
         let next_val:XdrResult<u32> = x.unpack_primitive();
         assert!(v.is_err() == false);
-        assert!(v.unwrap() == ~"RUST");
+        assert!(v.unwrap() == "RUST".to_owned());
         assert!(next_val.is_err() == false);
         assert!(next_val.unwrap() == 25);
     }
@@ -151,7 +151,7 @@ mod tests {
         let v = x.unpack_string();
         let next_val:XdrResult<u32> = x.unpack_primitive();
         assert!(v.is_err() == false);
-        assert!(v.unwrap() == ~"RUSTY");
+        assert!(v.unwrap() == "RUSTY".to_owned());
         assert!(next_val.is_err() == false);
         assert!(next_val.unwrap() == 25);
     }
